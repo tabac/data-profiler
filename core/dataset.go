@@ -33,6 +33,31 @@ func NewDataset(path string) *Dataset {
 	return d
 }
 
+func NewDatasetFromIntSlice(path string, datasetTuples [][]int) *Dataset {
+	dataset := NewDataset(path)
+
+	if len(datasetTuples) > 0 {
+		data := make([]DatasetTuple, len(datasetTuples))
+
+		for i, tuples := range(datasetTuples) {
+			data[i].Data = make([]float64, len(tuples))
+
+			for j, v := range(tuples) {
+				data[i].Data[j] = float64(v)
+			}
+		}
+
+		dataset.SetData(data)
+	}
+
+	return dataset
+}
+
+// Setter for the data attribute.
+func (d *Dataset) SetData(datasetTuples []DatasetTuple) {
+	d.data = datasetTuples
+}
+
 // ID getter for dataset
 func (d Dataset) ID() string {
 	return d.id

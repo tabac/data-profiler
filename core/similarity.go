@@ -191,6 +191,73 @@ func datasetSimilarityEstimatorCompute(e DatasetSimilarityEstimator) error {
 			<-done
 		}
 		log.Println("Done")
+	} else if e.PopulationPolicy().PolicyType == PopulationPolicyClustered {
+		// TODO: Probably don't need this.
+		e.SimilarityMatrix().IndexDisabled(true)
+
+		// 0. assert that we're talking about a `BhattacharyyaEstimator`.
+		be, ok := e.(*BhattacharyyaEstimator)
+		if !ok {
+			return errors.New("This Policy does not support this Similarity Estimator.")
+		}
+
+		// 1. assert that the partitioner has calculated the `pointsPerRegion`
+		//    vector for each dataset.
+		if len(be.PointsPerRegion()) != len(be.Datasets()) {
+			return errors.New("Similarity Estimator not initialized correctly.")
+		}
+
+		// 2. Create a new KMeansPartitioner that will cluster the
+		//    `be.PointsPerRegion()` vectors.
+		kmeansPartitionerConf := make(map[string]string)
+		// TODO: Should probably check to see what `be.maxPartitions` is.
+		kmeansPartitionerConf["partitions"] = fmt.Sprintf("%d", be.maxPartitions)
+
+		kmeansPartitioner := NewDataPartitioner(DataPartitionerKMeans,
+											   kmeansPartitionerConf)
+
+		// 3. Create a new `Dataset` from the `be.PointsPerRegion()`.
+		dataset := NewDatasetFromIntSlice("something", be.PointsPerRegion())
+
+		// 4. Cluster the `be.PointsPerRegion() vectors.
+		kmeansPartitioner.Construct(dataset.Data())
+		idxClusters, _, err := kmeansPartitioner.Partition(dataset.Data())
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+
+		// 5. For each of the above clusters calculate all-pairs similarities
+		//    and store them in `be.SimiarityMatrix()`.
+		log.Println("Computing the similarities using", be.Concurrency(), "threads")
+		c := make(chan bool, be.Concurrency())
+		done := make(chan bool)
+		for j := 0; j < be.Concurrency(); j++ {
+			c <- true
+		}
+
+		for _, idxCluster := range(idxClusters) {
+			for i := 0; i < len(idxCluster) - 1; i++ {
+				go func(c, done chan bool, i int) {
+					<-c
+					for j := i; j < len(idxCluster); j++ {
+						idx1, idx2 := idxCluster[i], idxCluster[j]
+						d1, d2 := e.Datasets()[idx1], e.Datasets()[idx2]
+						e.SimilarityMatrix().Set(idx1, idx2, e.Similarity(d1, d2))
+					}
+					c <- true
+					done <- true
+				}(c, done, i)
+			}
+		}
+
+		for j := 0; j < len(be.Datasets()) - 1; j++ {
+			<-done
+		}
+
+		// 3. Hoping for the best.
+
+		log.Println("Done")
 	} else if e.PopulationPolicy().PolicyType == PopulationPolicyAprx {
 		e.SimilarityMatrix().IndexDisabled(false) // I need the index
 		if count, ok := e.PopulationPolicy().Parameters["count"]; ok {
@@ -369,6 +436,11 @@ const (
 	// PopulationPolicyAprx must have defined one of two params:
 	// count (how many points) or threshold (percentage in similarity gain)
 	PopulationPolicyAprx DatasetSimilarityPopulationPolicyType = iota + 1
+
+	// PopulationPolicyClustered must have defined the number of
+	// clusters the datasets will be clustered to and similarity matrices
+	// will be calculated for.
+	PopulationPolicyClustered DatasetSimilarityPopulationPolicyType = iota + 2
 )
 
 // NewDatasetSimilarityEstimator is a factory method for the
