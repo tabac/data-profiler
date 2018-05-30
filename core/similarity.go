@@ -192,42 +192,99 @@ func datasetSimilarityEstimatorCompute(e DatasetSimilarityEstimator) error {
 		}
 		log.Println("Done")
 	} else if e.PopulationPolicy().PolicyType == PopulationPolicyClustered {
-		// TODO: Probably don't need this.
+		// TODO: Verify that we probably don't need this.
 		e.SimilarityMatrix().IndexDisabled(true)
 
-		// 0. assert that we're talking about a `BhattacharyyaEstimator`.
+		// 0. Parse required input parameters.
+		clusterCount, ok := e.PopulationPolicy().Parameters["clusters"]
+		if !ok {
+			message := "This Policy requires to set the `clusters` parameter."
+			log.Println(message)
+			return errors.New(message)
+		}
+
+		clusterSizeF, ok := e.PopulationPolicy().Parameters["clusters.size"]
+		if !ok {
+			message := "This Policy requires to set the `clusters.size` parameter."
+			log.Println(message)
+			return errors.New(message)
+		}
+		clusterSize := int(clusterSizeF)
+
+		iterations := KMeansMaxIteration
+		iterationsF, ok := e.PopulationPolicy().Parameters["iterations"]
+		if ok {
+			 iterations = int(iterationsF)
+		}
+
+		if clusterSize > len(e.Datasets()) {
+			message := "The specified `clusters.size` is larger the original dataset."
+			log.Println(message)
+			return errors.New(message)
+		}
+
+		// 0. Assert that we're talking about a `BhattacharyyaEstimator`.
 		be, ok := e.(*BhattacharyyaEstimator)
 		if !ok {
-			return errors.New("This Policy does not support this Similarity Estimator.")
+			message := "This Policy does not support the specified Similarity Estimator."
+			log.Println(message)
+			return errors.New(message)
 		}
 
-		// 1. assert that the partitioner has calculated the `pointsPerRegion`
+		// 1. Assert that the partitioner has calculated the `pointsPerRegion`
 		//    vector for each dataset.
 		if len(be.PointsPerRegion()) != len(be.Datasets()) {
-			return errors.New("Similarity Estimator not initialized correctly.")
+			message := "Similarity Estimator not initialized correctly."
+			log.Println(message)
+			return errors.New(message)
 		}
 
-		// 2. Create a new KMeansPartitioner that will cluster the
+		// 2. Create a new `Dataset` from the `be.PointsPerRegion()`.
+		dataset := NewDatasetFromIntSlice("tmp", be.PointsPerRegion())
+
+		// 3. Create a new KMeansPartitioner that will cluster the
 		//    `be.PointsPerRegion()` vectors.
 		kmeansPartitionerConf := make(map[string]string)
-		// TODO: Should probably check to see what `be.maxPartitions` is.
-		kmeansPartitionerConf["partitions"] = fmt.Sprintf("%d", be.maxPartitions)
+		kmeansPartitionerConf["partitions"] = fmt.Sprintf("%d", int(clusterCount))
 
 		kmeansPartitioner := NewDataPartitioner(DataPartitionerKMeans,
-											   kmeansPartitionerConf)
-
-		// 3. Create a new `Dataset` from the `be.PointsPerRegion()`.
-		dataset := NewDatasetFromIntSlice("something", be.PointsPerRegion())
+												kmeansPartitionerConf)
 
 		// 4. Cluster the `be.PointsPerRegion() vectors.
-		kmeansPartitioner.Construct(dataset.Data())
-		idxClusters, _, err := kmeansPartitioner.Partition(dataset.Data())
-		if err != nil {
-			log.Println(err)
-			return err
+		var cCount int
+		var idxClusters [][]int
+		clusteringSuccess := false
+		for cCount = 0; cCount < iterations && !clusteringSuccess; cCount++ {
+			kmeansPartitioner.Construct(dataset.Data())
+			idxClusters, _, err = kmeansPartitioner.Partition(dataset.Data())
+			if err != nil {
+				log.Println(err)
+				return err
+			}
+
+			clusteringSuccess = true
+			for j := 0; j < len(idxClusters) && clusteringSuccess; j++ {
+				clusteringSuccess = clusteringSuccess && len(idxClusters[j]) >= clusterSize
+			}
 		}
 
-		// 5. For each of the above clusters calculate all-pairs similarities
+		log.Println(fmt.Sprintf("Required %d KMeans iterations to produce required clustering.", cCount))
+		log.Println(fmt.Sprintf("%d clusters created.", len(idxClusters)))
+
+		// 5. Verify that it was a succesful clustering.
+		if !clusteringSuccess {
+			message := fmt.Sprintf("Could not create clusters of size %d", clusterSize)
+			log.Println(message)
+			return errors.New(message)
+		}
+
+		if len(idxClusters) == 0 {
+			message := "Could not cluster datasets, 0 clusters created."
+			log.Println(message)
+			return errors.New(message)
+		}
+
+		// 6. For each of the above clusters calculate all-pairs similarities
 		//    and store them in `be.SimiarityMatrix()`.
 		log.Println("Computing the similarities using", be.Concurrency(), "threads")
 		c := make(chan bool, be.Concurrency())
@@ -237,21 +294,23 @@ func datasetSimilarityEstimatorCompute(e DatasetSimilarityEstimator) error {
 		}
 
 		for _, idxCluster := range(idxClusters) {
-			for i := 0; i < len(idxCluster) - 1; i++ {
-				go func(c, done chan bool, i int) {
-					<-c
+			go func(c, done chan bool, idxCluster []int) {
+				<-c
+				for i := 0; i < len(idxCluster) - 1; i++ {
 					for j := i; j < len(idxCluster); j++ {
 						idx1, idx2 := idxCluster[i], idxCluster[j]
-						d1, d2 := e.Datasets()[idx1], e.Datasets()[idx2]
-						e.SimilarityMatrix().Set(idx1, idx2, e.Similarity(d1, d2))
+						d1, d2 := be.Datasets()[idx1], be.Datasets()[idx2]
+						be.SimilarityMatrix().Set(idx1, idx2, be.Similarity(d1, d2))
 					}
-					c <- true
-					done <- true
-				}(c, done, i)
-			}
+				}
+
+
+				c <- true
+				done <- true
+			}(c, done, idxCluster)
 		}
 
-		for j := 0; j < len(be.Datasets()) - 1; j++ {
+		for j := 0; j < len(idxClusters); j++ {
 			<-done
 		}
 
