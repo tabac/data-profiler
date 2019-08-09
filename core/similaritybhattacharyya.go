@@ -30,6 +30,11 @@ type BhattacharyyaEstimator struct {
 	datasetsSize []int
 }
 
+// Returns the pointsPerRegion.
+func (e *BhattacharyyaEstimator) PointsPerRegion() [][]int {
+	return e.pointsPerRegion
+}
+
 // Compute method constructs the Similarity Matrix
 func (e *BhattacharyyaEstimator) Compute() error {
 	return datasetSimilarityEstimatorCompute(e)
@@ -47,7 +52,7 @@ func (e *BhattacharyyaEstimator) Similarity(a, b *Dataset) float64 {
 		if err != nil {
 			log.Println(err)
 		}
-		clusters, err := e.partitioner.Partition(a.Data())
+		_, clusters, err := e.partitioner.Partition(a.Data())
 		if err != nil {
 			log.Println(err)
 		}
@@ -66,7 +71,7 @@ func (e *BhattacharyyaEstimator) Similarity(a, b *Dataset) float64 {
 		if err != nil {
 			log.Println(err)
 		}
-		clusters, err := e.partitioner.Partition(b.Data())
+		_, clusters, err := e.partitioner.Partition(b.Data())
 		if err != nil {
 			log.Println(err)
 		}
@@ -155,7 +160,7 @@ func (e *BhattacharyyaEstimator) init(partitionerType DataPartitionerType, parti
 	e.pointsPerRegion = make([][]int, len(e.datasets))
 	e.datasetsSize = make([]int, len(e.datasets))
 	for i, d := range e.datasets {
-		clusters, err := e.partitioner.Partition(d.Data())
+		_, clusters, err := e.partitioner.Partition(d.Data())
 		if err != nil {
 			log.Println(err)
 		} else {

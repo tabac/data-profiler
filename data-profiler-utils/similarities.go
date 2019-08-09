@@ -34,7 +34,7 @@ func similaritiesParseParams() *similaritiesParams {
 	params.options =
 		flag.String("opt", "", "options in the form val1=key1,val2=key2 (list for opts list)")
 	popPolicy :=
-		flag.String("p", "FULL", "population policy [FULL|APRX] along with options in the form POLICY,val1=key1,val2=key2")
+		flag.String("p", "FULL", "population policy [FULL|APRX|CLUS] along with options in the form POLICY,val1=key1,val2=key2")
 	params.estimatorPath =
 		flag.String("e", "", "if set, serializes the estimator to the specified path")
 	flag.Parse()
@@ -46,8 +46,13 @@ func similaritiesParseParams() *similaritiesParams {
 	params.populationPolicy.Parameters = make(map[string]float64)
 	if popPolicyType == "FULL" {
 		params.populationPolicy.PolicyType = core.PopulationPolicyFull
-	} else if popPolicyType == "APRX" {
-		params.populationPolicy.PolicyType = core.PopulationPolicyAprx
+	} else if popPolicyType == "APRX" || popPolicyType == "CLUS" {
+		if popPolicyType == "APPX" {
+			params.populationPolicy.PolicyType = core.PopulationPolicyAprx
+		} else {
+			params.populationPolicy.PolicyType = core.PopulationPolicyClustered
+		}
+
 		idx := strings.Index(*popPolicy, ",")
 		if idx > -1 {
 			for k, v := range parseOptions((*popPolicy)[idx+1 : len(*popPolicy)]) {

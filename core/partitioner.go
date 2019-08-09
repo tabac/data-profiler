@@ -17,7 +17,7 @@ type DataPartitioner interface {
 	// Construct estimates the partitioning of the provided tuples (offline)
 	Construct([]DatasetTuple) error
 	// Partition executes partitioning to new datasets
-	Partition([]DatasetTuple) ([][]DatasetTuple, error)
+	Partition([]DatasetTuple) ([][]int, [][]DatasetTuple, error)
 	// Configure provides the necessary configuration option to DataPartitioner
 	Configure(map[string]string)
 	// Options returns a list of options the DataPartitioner accepts with a
@@ -174,9 +174,11 @@ func (p *KMeansPartitioner) estimateWeights(tuples []DatasetTuple) {
 
 // assignTuplesToCentroids partitions the tuples according to their
 // weighted distance from the calculated centroids
-func (p *KMeansPartitioner) assignTuplesToCentroids(tuples []DatasetTuple) [][]DatasetTuple {
-	groups := make([][]DatasetTuple, len(p.centroids))
-	for _, t := range tuples {
+func (p *KMeansPartitioner) assignTuplesToCentroids(tuples []DatasetTuple) (
+	[][]int, [][]DatasetTuple) {
+	groups    := make([][]DatasetTuple, len(p.centroids))
+	idxGroups := make([][]int, len(p.centroids))
+	for i, t := range tuples {
 		closestIdx, closestDst := 0, p.distance(t, p.centroids[0])
 		for j, c := range p.centroids {
 			currentDst := p.distance(t, c)
@@ -185,8 +187,9 @@ func (p *KMeansPartitioner) assignTuplesToCentroids(tuples []DatasetTuple) [][]D
 			}
 		}
 		groups[closestIdx] = append(groups[closestIdx], t)
+		idxGroups[closestIdx] = append(idxGroups[closestIdx], i)
 	}
-	return groups
+	return idxGroups, groups
 }
 
 // estimateCentroids estimates the new centroids based on the given clusters
@@ -263,7 +266,7 @@ func (p *KMeansPartitioner) Construct(tuples []DatasetTuple) error {
 	p.initializeCentroids(tuples)
 	delta := math.Inf(1)
 	for i := 0; i < KMeansMaxIteration && delta > 0; i++ {
-		clusters := p.assignTuplesToCentroids(tuples)
+		_, clusters := p.assignTuplesToCentroids(tuples)
 		newCentroids := p.estimateCentroids(clusters)
 		delta = p.centroidsDelta(p.centroids, newCentroids)
 		p.centroids = newCentroids
@@ -273,17 +276,18 @@ func (p *KMeansPartitioner) Construct(tuples []DatasetTuple) error {
 
 // Partition receives a set of tuples as input and returns a number of clusters
 func (p *KMeansPartitioner) Partition(tuples []DatasetTuple) (
-	[][]DatasetTuple, error) {
+	[][]int, [][]DatasetTuple, error) {
 	if len(tuples) == 0 {
-		return nil, errors.New("no tuples to partition")
+		return nil, nil, errors.New("no tuples to partition")
 	}
 	if p.centroids == nil || len(p.centroids) == 0 {
-		return nil, errors.New("centroids not estimated")
+		return nil, nil, errors.New("centroids not estimated")
 	}
 	if len(tuples[0].Data) != len(p.centroids[0].Data) {
-		return nil, errors.New("wrong data dimensionality")
+		return nil, nil, errors.New("wrong data dimensionality")
 	}
-	return p.assignTuplesToCentroids(tuples), nil
+	idxGroups, groups := p.assignTuplesToCentroids(tuples)
+	return idxGroups, groups, nil
 }
 
 func (p *KMeansPartitioner) Serialize() []byte {
@@ -446,17 +450,19 @@ func (p *KDTreePartitioner) Construct(tuples []DatasetTuple) error {
 
 // Partition applies the previously constructed kd-tree in order to partition
 // the given dataset
-func (p *KDTreePartitioner) Partition(tuples []DatasetTuple) ([][]DatasetTuple, error) {
+func (p *KDTreePartitioner) Partition(tuples []DatasetTuple) (
+	[][]int, [][]DatasetTuple, error) {
 	if len(tuples) == 0 {
-		return nil, errors.New("no tuples to partition")
+		return nil, nil, errors.New("no tuples to partition")
 	}
 	if p.kdtree == nil {
-		return nil, errors.New("kdtree not estimated")
+		return nil, nil, errors.New("kdtree not estimated")
 	}
 
-	maxHeight := int(math.Floor(math.Log(float64(p.partitions)) + 1))
-	clusters := make([][]DatasetTuple, p.partitions)
-	for _, t := range tuples {
+	maxHeight   := int(math.Floor(math.Log(float64(p.partitions)) + 1))
+	clusters    := make([][]DatasetTuple, p.partitions)
+	idxClusters := make([][]int, p.partitions)
+	for i, t := range tuples {
 		id, idx, bitOps := 0, 0, 0
 		for idx < len(p.kdtree) {
 			cur := p.kdtree[idx]
@@ -473,8 +479,9 @@ func (p *KDTreePartitioner) Partition(tuples []DatasetTuple) ([][]DatasetTuple, 
 			id = (id << 1) | 0
 		}
 		clusters[id] = append(clusters[id], t)
+		idxClusters[id] = append(idxClusters[id], i)
 	}
-	return clusters, nil
+	return idxClusters, clusters, nil
 }
 
 // Serialize returns a byte array with the serialized object
